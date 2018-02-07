@@ -11,6 +11,8 @@
 -module(librdkafka).
 
 %% Public API
+% -export([kafka_config/1]).
+% -export([topic_config/1]).
 %% Internal API
 -export([priv_dir/0]).
 
@@ -19,6 +21,14 @@
 %%%===================================================================
 %%% Public API Functions
 %%%===================================================================
+
+% kafka_config(Config0) ->
+% 	Config1 = librdkafka_config:transform_kafka_config(Config0),
+% 	librdkafka_nif:kafka_config(Config1).
+
+% topic_config(Config0) ->
+% 	Config1 = librdkafka_config:transform_topic_config(Config0),
+% 	librdkafka_nif:topic_config(Config1).
 
 %%%===================================================================
 %%% Internal API Functions
