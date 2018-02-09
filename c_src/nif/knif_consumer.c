@@ -264,6 +264,19 @@ static ERL_NIF_TERM partitions_to_list(ErlNifEnv *env, knif_consumer_t *consumer
                                        int is_assignment);
 
 void
+knif_consumer_error(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_resp_err_t rkresperr, const char *rkrespstr)
+{
+    ERL_NIF_TERM event;
+    ERL_NIF_TERM message;
+
+    event = consumer->cb->make_error(env, consumer, rkresperr, rkrespstr);
+    message = consumer->cb->make_message(env, consumer, event);
+    (void)enif_send(env, &consumer->pid, NULL, message);
+
+    return;
+}
+
+void
 knif_consumer_log(ErlNifEnv *env, knif_consumer_t *consumer, int rkloglevel, const char *rklogfac, const char *rklogstr)
 {
     ERL_NIF_TERM event;

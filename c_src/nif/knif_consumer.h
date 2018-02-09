@@ -33,6 +33,7 @@ struct knif_consumer_cb_s {
     ERL_NIF_TERM (*make_log)(ErlNifEnv *env, knif_consumer_t *consumer, int rkloglevel, const char *rklogfac, const char *rklogstr);
     ERL_NIF_TERM (*make_stats)(ErlNifEnv *env, knif_consumer_t *consumer, const char *rkstats);
     ERL_NIF_TERM (*make_offset_commit)(ErlNifEnv *env, knif_consumer_t *consumer, ERL_NIF_TERM partitions);
+    ERL_NIF_TERM (*make_error)(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_resp_err_t rkresperr, const char *rkrespstr);
 };
 
 #ifdef __cplusplus
@@ -46,6 +47,7 @@ extern knif_consumer_t *knif_consumer_new(ErlNifEnv *env, const knif_consumer_cb
                                           rd_kafka_topic_conf_t *topic_conf, ERL_NIF_TERM topic_list, char *errstr,
                                           size_t errstr_size);
 extern int knif_consumer_get(ErlNifEnv *env, ERL_NIF_TERM consumer_term, knif_consumer_t **consumer);
+extern void knif_consumer_error(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_resp_err_t rkresperr, const char *rkrespstr);
 extern void knif_consumer_log(ErlNifEnv *env, knif_consumer_t *consumer, int rkloglevel, const char *rklogfac,
                               const char *rklogstr);
 extern void knif_consumer_offset_commit(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_resp_err_t rkresperr,

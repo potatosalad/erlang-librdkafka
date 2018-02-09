@@ -47,7 +47,7 @@ static ERL_NIF_TERM librdkafka_nif_queue_forward_2(ErlNifEnv *env, int argc, con
 static ERL_NIF_TERM librdkafka_nif_queue_select_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM librdkafka_nif_queue_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 
-/* Consumer Helper Functions */
+/* Term Helper Functions */
 
 static ERL_NIF_TERM librdkafka_nif_make_partition(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_topic_partition_t *rkpart,
                                                   int is_assignment);
@@ -58,6 +58,8 @@ static ERL_NIF_TERM librdkafka_nif_make_log(ErlNifEnv *env, knif_consumer_t *con
                                             const char *rklogstr);
 static ERL_NIF_TERM librdkafka_nif_make_stats(ErlNifEnv *env, knif_consumer_t *consumer, const char *rkstats);
 static ERL_NIF_TERM librdkafka_nif_make_offset_commit(ErlNifEnv *env, knif_consumer_t *consumer, ERL_NIF_TERM partitions);
+static ERL_NIF_TERM librdkafka_nif_make_error(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_resp_err_t rkresperr,
+                                              const char *rkrespstr);
 
 static const knif_consumer_cb_t librdkafka_nif_consumer_cb = {.make_partition = librdkafka_nif_make_partition,
                                                               .make_assign_partitions = librdkafka_nif_make_assign_partitions,
@@ -65,7 +67,8 @@ static const knif_consumer_cb_t librdkafka_nif_consumer_cb = {.make_partition = 
                                                               .make_message = librdkafka_nif_make_message,
                                                               .make_log = librdkafka_nif_make_log,
                                                               .make_stats = librdkafka_nif_make_stats,
-                                                              .make_offset_commit = librdkafka_nif_make_offset_commit};
+                                                              .make_offset_commit = librdkafka_nif_make_offset_commit,
+                                                              .make_error = librdkafka_nif_make_error};
 
 static ERL_NIF_TERM
 librdkafka_nif_make_partition(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_topic_partition_t *rkpart, int is_assignment)
@@ -154,6 +157,13 @@ static ERL_NIF_TERM
 librdkafka_nif_make_offset_commit(ErlNifEnv *env, knif_consumer_t *consumer, ERL_NIF_TERM partitions)
 {
     return enif_make_tuple2(env, ATOM_offset_commit, partitions);
+}
+
+static ERL_NIF_TERM
+librdkafka_nif_make_error(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_resp_err_t rkresperr, const char *rkrespstr)
+{
+    return enif_make_tuple3(env, ATOM_error, enif_make_int(env, (int)rkresperr),
+                            knif_cstring_to_binary(env, rkrespstr, strlen(rkrespstr)));
 }
 
 /* NIF Function Definitions */
@@ -514,6 +524,7 @@ librdkafka_nif_consumer_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     (void)retval;
 
     rd_kafka_resp_err_t rkresperr;
+    const char *rkrespstr;
     rd_kafka_topic_partition_list_t *rkparlist = NULL;
     int rkloglevel;
     const char *rklogfac;
@@ -523,6 +534,11 @@ librdkafka_nif_consumer_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     while ((rkev = rd_kafka_queue_poll(consumer->rkqu, 0)) != NULL) {
         evcnt++;
         switch (rd_kafka_event_type(rkev)) {
+        case RD_KAFKA_EVENT_ERROR:
+            rkresperr = rd_kafka_event_error(rkev);
+            rkrespstr = rd_kafka_event_error_string(rkev);
+            (void)knif_consumer_error(env, consumer, rkresperr, rkrespstr);
+            break;
         case RD_KAFKA_EVENT_LOG:
             if (rd_kafka_event_log(rkev, &rklogfac, &rklogstr, &rkloglevel) == 0) {
                 (void)knif_consumer_log(env, consumer, rkloglevel, rklogfac, rklogstr);
@@ -646,6 +662,7 @@ librdkafka_nif_queue_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     (void)retval;
 
     rd_kafka_resp_err_t rkresperr;
+    const char *rkrespstr;
     const rd_kafka_message_t *rkmsg = NULL;
     xnif_term_vector_t tv = {.entries = NULL, .size = 0, .capacity = 0};
     size_t rkmsgcnt = 0;
@@ -696,8 +713,10 @@ librdkafka_nif_queue_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                 event = enif_make_tuple3(env, ATOM_kafka, enif_make_resource(env, (void *)queue), ATOM_partition_eof);
                 (void)enif_send(env, &queue->pid, NULL, event);
             } else {
-                XNIF_TRACE_F("[queue] got an error: %s (%d)\n", rd_kafka_err2str(rd_kafka_event_error(rkev)),
-                             rd_kafka_event_error(rkev));
+                rkrespstr = rd_kafka_event_error_string(rkev);
+                event = librdkafka_nif_make_error(env, (void *)queue->consumer, rkresperr, rkrespstr);
+                event = enif_make_tuple3(env, ATOM_kafka, enif_make_resource(env, (void *)queue), event);
+                (void)enif_send(env, &queue->pid, NULL, event);
             }
             break;
         default:
