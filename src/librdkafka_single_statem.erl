@@ -8,7 +8,7 @@
 %%% @end
 %%% Created :  06 February 2018 by Andrew Bennett <potatosaladx@gmail.com>
 %%%-------------------------------------------------------------------
--module(librdkafka_c).
+-module(librdkafka_single_statem).
 -behaviour(gen_statem).
 
 %% API

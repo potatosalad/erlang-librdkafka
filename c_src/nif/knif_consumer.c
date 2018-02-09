@@ -24,32 +24,36 @@ knif_consumer_dtor(ErlNifEnv *env, void *obj)
     if (p->rkqu != NULL) {
         (void)rd_kafka_queue_destroy(p->rkqu);
         p->rkqu = NULL;
-        XNIF_TRACE_F("rd_kafka_queue_destroy()\n");
+        // XNIF_TRACE_F("rd_kafka_queue_destroy()\n");
     }
     if (p->rk != NULL) {
-        XNIF_TRACE_F("rd_kafka_consumer_close() ?\n");
+        // XNIF_TRACE_F("rd_kafka_consumer_close() ?\n");
         (void)rd_kafka_consumer_close(p->rk);
-        XNIF_TRACE_F("rd_kafka_consumer_close() !\n");
+        // XNIF_TRACE_F("rd_kafka_consumer_close() !\n");
         (void)rd_kafka_destroy(p->rk);
-        XNIF_TRACE_F("rd_kafka_destroy()\n");
+        // XNIF_TRACE_F("rd_kafka_destroy()\n");
         p->rk = NULL;
     }
     if (p->rkparlist != NULL) {
-        XNIF_TRACE_F("rd_kafka_topic_partition_list_destroy() ?\n");
+        // XNIF_TRACE_F("rd_kafka_topic_partition_list_destroy() ?\n");
         (void)rd_kafka_topic_partition_list_destroy(p->rkparlist);
-        XNIF_TRACE_F("rd_kafka_topic_partition_list_destroy() !\n");
+        // XNIF_TRACE_F("rd_kafka_topic_partition_list_destroy() !\n");
         p->rkparlist = NULL;
     }
     if (p->kc != NULL) {
-        XNIF_TRACE_F("rd_kafka_conf_destroy() ?\n");
-        (void)rd_kafka_conf_destroy(p->kc);
-        XNIF_TRACE_F("rd_kafka_conf_destroy() !\n");
+        if (!p->kc_readonly) {
+            // XNIF_TRACE_F("rd_kafka_conf_destroy() ?\n");
+            (void)rd_kafka_conf_destroy(p->kc);
+            // XNIF_TRACE_F("rd_kafka_conf_destroy() !\n");
+        }
         p->kc = NULL;
     }
     if (p->tc != NULL) {
-        XNIF_TRACE_F("rd_kafka_topic_conf_destroy() ?\n");
-        (void)rd_kafka_topic_conf_destroy(p->tc);
-        XNIF_TRACE_F("rd_kafka_topic_conf_destroy() !\n");
+        if (!p->tc_readonly) {
+            // XNIF_TRACE_F("rd_kafka_topic_conf_destroy() ?\n");
+            (void)rd_kafka_topic_conf_destroy(p->tc);
+            // XNIF_TRACE_F("rd_kafka_topic_conf_destroy() !\n");
+        }
         p->tc = NULL;
     }
     (void)knif_pipe_close(p->fds);
@@ -112,7 +116,7 @@ knif_consumer_create(ErlNifEnv *env, rd_kafka_conf_t *kafka_conf, rd_kafka_topic
     (void)rd_kafka_conf_set_opaque(p->kc, (void *)p);
     (void)rd_kafka_topic_conf_set_opaque(p->tc, (void *)p);
     (void)rd_kafka_conf_set_default_topic_conf(p->kc, p->tc);
-    p->tc = NULL;
+    p->tc_readonly = 1;
     // #define RD_KAFKA_EVENT_DR            0x1  /**< Producer Delivery report batch */
     // #define RD_KAFKA_EVENT_FETCH         0x2  /**< Fetched message (consumer) */
     // #define RD_KAFKA_EVENT_LOG           0x4  /**< Log message */
@@ -129,7 +133,7 @@ knif_consumer_create(ErlNifEnv *env, rd_kafka_conf_t *kafka_conf, rd_kafka_topic
     p->fds[0] = -1;
     p->fds[1] = -1;
     (void)enif_self(env, &p->pid);
-    if (enif_monitor_process(env, (void *)p, &p->pid, NULL) != 0) {
+    if (enif_monitor_process(env, (void *)p, &p->pid, &p->mon) != 0) {
         (void)enif_release_resource((void *)p);
         return NULL;
     }
@@ -172,7 +176,7 @@ knif_consumer_new(ErlNifEnv *env, const knif_consumer_cb_t *cb, rd_kafka_conf_t 
         (void)enif_release_resource((void *)p);
         return NULL;
     }
-    p->kc = NULL;
+    p->kc_readonly = 1;
 
     XNIF_TRACE_F("rd_kafka_new()\n");
 
@@ -226,6 +230,15 @@ knif_consumer_new(ErlNifEnv *env, const knif_consumer_cb_t *cb, rd_kafka_conf_t 
         return NULL;
     }
 
+    rkresperr = rd_kafka_set_log_queue(p->rk, p->rkqu);
+    XNIF_TRACE_F("rd_kafka_set_log_queue()\n");
+    if (rkresperr != RD_KAFKA_RESP_ERR_NO_ERROR) {
+        (void)enif_snprintf(errstr, errstr_size, "failed during setup of kafka consumer: rd_kafka_set_log_queue() %s",
+                            rd_kafka_err2str(rkresperr));
+        (void)enif_release_resource((void *)p);
+        return NULL;
+    }
+
     (void)rd_kafka_queue_io_event_enable(p->rkqu, p->fds[1], "1", 1);
 
     return p;
@@ -247,10 +260,42 @@ knif_consumer_get(ErlNifEnv *env, ERL_NIF_TERM consumer_term, knif_consumer_t **
     return 1;
 }
 
-static void assign_partitions(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_topic_partition_list_t *rkparlist);
-static void revoke_partitions(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_topic_partition_list_t *rkparlist);
 static ERL_NIF_TERM partitions_to_list(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_topic_partition_list_t *rkparlist,
                                        int is_assignment);
+
+void
+knif_consumer_log(ErlNifEnv *env, knif_consumer_t *consumer, int rkloglevel, const char *rklogfac, const char *rklogstr)
+{
+    ERL_NIF_TERM event;
+    ERL_NIF_TERM message;
+
+    event = consumer->cb->make_log(env, consumer, rkloglevel, rklogfac, rklogstr);
+    message = consumer->cb->make_message(env, consumer, event);
+    (void)enif_send(env, &consumer->pid, NULL, message);
+
+    return;
+}
+
+void
+knif_consumer_offset_commit(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_resp_err_t rkresperr,
+                            rd_kafka_topic_partition_list_t *rkparlist)
+{
+    XNIF_TRACE_F("(offset_commit) rkresperr = %d\n", rkresperr);
+
+    ERL_NIF_TERM partitions;
+    ERL_NIF_TERM event;
+    ERL_NIF_TERM message;
+
+    partitions = partitions_to_list(env, consumer, rkparlist, 0);
+    event = consumer->cb->make_offset_commit(env, consumer, partitions);
+    message = consumer->cb->make_message(env, consumer, event);
+    (void)enif_send(env, &consumer->pid, NULL, message);
+
+    return;
+}
+
+static void assign_partitions(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_topic_partition_list_t *rkparlist);
+static void revoke_partitions(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_topic_partition_list_t *rkparlist);
 
 void
 knif_consumer_rebalance(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_resp_err_t rkresperr,
@@ -337,4 +382,17 @@ partitions_to_list(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_topic_par
     list = enif_make_list_from_array(env, elements, rkparlist->cnt);
     (void)enif_free((void *)elements);
     return list;
+}
+
+void
+knif_consumer_stats(ErlNifEnv *env, knif_consumer_t *consumer, const char *rkstats)
+{
+    ERL_NIF_TERM event;
+    ERL_NIF_TERM message;
+
+    event = consumer->cb->make_stats(env, consumer, rkstats);
+    message = consumer->cb->make_message(env, consumer, event);
+    (void)enif_send(env, &consumer->pid, NULL, message);
+
+    return;
 }

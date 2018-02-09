@@ -32,9 +32,16 @@ knif_kafka_config_parse(ErlNifEnv *env, ERL_NIF_TERM list, rd_kafka_conf_t **con
     key_bin.size = 0;
     val_bin.size = 0;
 
-    if (rd_kafka_conf_set(conf, "enable.auto.commit", "true", NULL, 0) != RD_KAFKA_CONF_OK ||
-        rd_kafka_conf_set(conf, "enable.auto.offset.store", "false", NULL, 0) != RD_KAFKA_CONF_OK ||
-        rd_kafka_conf_set(conf, "enable.partition.eof", "false", NULL, 0) != RD_KAFKA_CONF_OK) {
+    // if (rd_kafka_conf_set(conf, "enable.auto.commit", "true", NULL, 0) != RD_KAFKA_CONF_OK ||
+    //     rd_kafka_conf_set(conf, "enable.auto.offset.store", "false", NULL, 0) != RD_KAFKA_CONF_OK ||
+    //     rd_kafka_conf_set(conf, "enable.partition.eof", "false", NULL, 0) != RD_KAFKA_CONF_OK) {
+    //     *err_termp = enif_raise_exception(env, knif_literal_to_binary(env, "failed to apply default kafka config"));
+    //     (void)rd_kafka_conf_destroy(conf);
+    //     return 0;
+    // }
+
+    if (rd_kafka_conf_set(conf, "log.queue", "true", NULL, 0) != RD_KAFKA_CONF_OK ||
+        rd_kafka_conf_set(conf, "statistics.interval.ms", "5000", NULL, 0) != RD_KAFKA_CONF_OK) {
         *err_termp = enif_raise_exception(env, knif_literal_to_binary(env, "failed to apply default kafka config"));
         (void)rd_kafka_conf_destroy(conf);
         return 0;

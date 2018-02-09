@@ -18,19 +18,31 @@ static ERL_NIF_TERM ATOM_badarg;
 static ERL_NIF_TERM ATOM_closed;
 static ERL_NIF_TERM ATOM_error;
 static ERL_NIF_TERM ATOM_false;
+static ERL_NIF_TERM ATOM_fetch;
+static ERL_NIF_TERM ATOM_forward;
 static ERL_NIF_TERM ATOM_kafka;
+static ERL_NIF_TERM ATOM_log;
 static ERL_NIF_TERM ATOM_nil;
+static ERL_NIF_TERM ATOM_not_owner;
+static ERL_NIF_TERM ATOM_offset_commit;
 static ERL_NIF_TERM ATOM_ok;
 static ERL_NIF_TERM ATOM_rebalance;
 static ERL_NIF_TERM ATOM_revoke_partitions;
+static ERL_NIF_TERM ATOM_stats;
 static ERL_NIF_TERM ATOM_true;
 static ERL_NIF_TERM ATOM_undefined;
 
 /* NIF Function Declarations */
 
+static ERL_NIF_TERM librdkafka_nif_kafka_config_dump_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM librdkafka_nif_topic_config_dump_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM librdkafka_nif_kafka_config_fetch_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM librdkafka_nif_topic_config_fetch_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM librdkafka_nif_consumer_new_4(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM librdkafka_nif_consumer_forward_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM librdkafka_nif_consumer_select_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM librdkafka_nif_consumer_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM librdkafka_nif_queue_forward_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM librdkafka_nif_queue_select_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM librdkafka_nif_queue_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 
@@ -41,11 +53,18 @@ static ERL_NIF_TERM librdkafka_nif_make_partition(ErlNifEnv *env, knif_consumer_
 static ERL_NIF_TERM librdkafka_nif_make_assign_partitions(ErlNifEnv *env, knif_consumer_t *consumer, ERL_NIF_TERM partitions);
 static ERL_NIF_TERM librdkafka_nif_make_revoke_partitions(ErlNifEnv *env, knif_consumer_t *consumer, ERL_NIF_TERM partitions);
 static ERL_NIF_TERM librdkafka_nif_make_message(ErlNifEnv *env, knif_consumer_t *consumer, ERL_NIF_TERM event);
+static ERL_NIF_TERM librdkafka_nif_make_log(ErlNifEnv *env, knif_consumer_t *consumer, int rkloglevel, const char *rklogfac,
+                                            const char *rklogstr);
+static ERL_NIF_TERM librdkafka_nif_make_stats(ErlNifEnv *env, knif_consumer_t *consumer, const char *rkstats);
+static ERL_NIF_TERM librdkafka_nif_make_offset_commit(ErlNifEnv *env, knif_consumer_t *consumer, ERL_NIF_TERM partitions);
 
 static const knif_consumer_cb_t librdkafka_nif_consumer_cb = {.make_partition = librdkafka_nif_make_partition,
                                                               .make_assign_partitions = librdkafka_nif_make_assign_partitions,
                                                               .make_revoke_partitions = librdkafka_nif_make_revoke_partitions,
-                                                              .make_message = librdkafka_nif_make_message};
+                                                              .make_message = librdkafka_nif_make_message,
+                                                              .make_log = librdkafka_nif_make_log,
+                                                              .make_stats = librdkafka_nif_make_stats,
+                                                              .make_offset_commit = librdkafka_nif_make_offset_commit};
 
 static ERL_NIF_TERM
 librdkafka_nif_make_partition(ErlNifEnv *env, knif_consumer_t *consumer, rd_kafka_topic_partition_t *rkpart, int is_assignment)
@@ -106,73 +125,233 @@ librdkafka_nif_make_message(ErlNifEnv *env, knif_consumer_t *consumer, ERL_NIF_T
     return enif_make_tuple_from_array(env, tuple, 3);
 }
 
+static ERL_NIF_TERM
+librdkafka_nif_make_log(ErlNifEnv *env, knif_consumer_t *consumer, int rkloglevel, const char *rklogfac, const char *rklogstr)
+{
+    ERL_NIF_TERM level;
+    ERL_NIF_TERM label;
+    ERL_NIF_TERM value;
+
+    level = enif_make_int(env, rkloglevel);
+    label = knif_cstring_to_binary(env, rklogfac, strlen(rklogfac));
+    value = knif_cstring_to_binary(env, rklogstr, strlen(rklogstr));
+
+    return enif_make_tuple4(env, ATOM_log, level, label, value);
+}
+
+static ERL_NIF_TERM
+librdkafka_nif_make_stats(ErlNifEnv *env, knif_consumer_t *consumer, const char *rkstats)
+{
+    ERL_NIF_TERM json;
+
+    json = knif_cstring_to_binary(env, rkstats, strlen(rkstats));
+
+    return enif_make_tuple2(env, ATOM_stats, json);
+}
+
+static ERL_NIF_TERM
+librdkafka_nif_make_offset_commit(ErlNifEnv *env, knif_consumer_t *consumer, ERL_NIF_TERM partitions)
+{
+    return enif_make_tuple2(env, ATOM_offset_commit, partitions);
+}
+
 /* NIF Function Definitions */
 
-// /* librdkafka_nif:check/0 */
+/* librdkafka_nif:kafka_config_dump/1 */
 
-// static ERL_NIF_TERM
-// librdkafka_nif_check_0(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-// {
-//     return ATOM_ok;
-// }
+static ERL_NIF_TERM
+librdkafka_nif_kafka_config_dump_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    knif_consumer_t *consumer = NULL;
+    knif_queue_t *queue = NULL;
+    const char **dump = NULL;
+    size_t dump_size = 0;
+    ERL_NIF_TERM *elements = NULL;
+    size_t i;
+    size_t j = 0;
+    const char *key_str = NULL;
+    const char *val_str = NULL;
+    ERL_NIF_TERM key_term;
+    ERL_NIF_TERM val_term;
+    ERL_NIF_TERM out_term;
 
-// /* librdkafka_nif:kafka_config/1 */
+    if (argc != 1 || (!knif_consumer_get(env, argv[0], &consumer) && !knif_queue_get(env, argv[0], &queue))) {
+        return enif_make_badarg(env);
+    }
 
-// static ERL_NIF_TERM
-// librdkafka_nif_kafka_config_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-// {
-//     knif_kafka_config_t *p = NULL;
-//     ERL_NIF_TERM out_term;
+    if (consumer == NULL) {
+        consumer = (void *)queue->consumer;
+    }
 
-//     if (argc != 1 || !enif_is_list(env, argv[0])) {
-//         return enif_make_badarg(env);
-//     }
+    dump = rd_kafka_conf_dump(consumer->kc, &dump_size);
 
-//     p = knif_kafka_config_create();
-//     if (p == NULL) {
-//         return enif_make_badarg(env);
-//     }
+    elements = (void *)xnif_mem_alloc(sizeof(ERL_NIF_TERM) * dump_size);
 
-//     if (!knif_kafka_config_parse(env, p, argv[0], &out_term)) {
-//         out_term = enif_raise_exception(env, enif_make_tuple2(env, ATOM_badarg, out_term));
-//         (void)enif_release_resource((void *)p);
-//         return out_term;
-//     }
+    for (i = 0; i < dump_size; i++) {
+        if ((i % 2) == 0) {
+            val_str = NULL;
+            key_str = dump[i];
+        } else {
+            val_str = dump[i];
+        }
+        if (key_str != NULL && val_str != NULL) {
+            key_term = knif_cstring_to_binary(env, key_str, strlen(key_str));
+            val_term = knif_cstring_to_binary(env, val_str, strlen(val_str));
+            elements[j] = enif_make_tuple2(env, key_term, val_term);
+            j++;
+        }
+    }
 
-//     out_term = enif_make_resource(env, (void *)p);
-//     (void)enif_release_resource((void *)p);
+    (void)rd_kafka_conf_dump_free(dump, dump_size);
 
-//     return out_term;
-// }
+    out_term = enif_make_list_from_array(env, elements, j);
 
-// /* librdkafka_nif:topic_config/1 */
+    (void)enif_free((void *)elements);
 
-// static ERL_NIF_TERM
-// librdkafka_nif_topic_config_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-// {
-//     knif_topic_config_t *p = NULL;
-//     ERL_NIF_TERM out_term;
+    return out_term;
+}
 
-//     if (argc != 1 || !enif_is_list(env, argv[0])) {
-//         return enif_make_badarg(env);
-//     }
+/* librdkafka_nif:topic_config_dump/1 */
 
-//     p = knif_topic_config_create();
-//     if (p == NULL) {
-//         return enif_make_badarg(env);
-//     }
+static ERL_NIF_TERM
+librdkafka_nif_topic_config_dump_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    knif_consumer_t *consumer = NULL;
+    knif_queue_t *queue = NULL;
+    const char **dump = NULL;
+    size_t dump_size = 0;
+    ERL_NIF_TERM *elements = NULL;
+    size_t i;
+    size_t j = 0;
+    const char *key_str = NULL;
+    const char *val_str = NULL;
+    ERL_NIF_TERM key_term;
+    ERL_NIF_TERM val_term;
+    ERL_NIF_TERM out_term;
 
-//     if (!knif_topic_config_parse(env, p, argv[0], &out_term)) {
-//         out_term = enif_raise_exception(env, enif_make_tuple2(env, ATOM_badarg, out_term));
-//         (void)enif_release_resource((void *)p);
-//         return out_term;
-//     }
+    if (argc != 1 || (!knif_consumer_get(env, argv[0], &consumer) && !knif_queue_get(env, argv[0], &queue))) {
+        return enif_make_badarg(env);
+    }
 
-//     out_term = enif_make_resource(env, (void *)p);
-//     (void)enif_release_resource((void *)p);
+    if (consumer == NULL) {
+        consumer = (void *)queue->consumer;
+    }
 
-//     return out_term;
-// }
+    dump = rd_kafka_topic_conf_dump(consumer->tc, &dump_size);
+
+    elements = (void *)xnif_mem_alloc(sizeof(ERL_NIF_TERM) * dump_size);
+
+    for (i = 0; i < dump_size; i++) {
+        if ((i % 2) == 0) {
+            val_str = NULL;
+            key_str = dump[i];
+        } else {
+            val_str = dump[i];
+        }
+        if (key_str != NULL && val_str != NULL) {
+            key_term = knif_cstring_to_binary(env, key_str, strlen(key_str));
+            val_term = knif_cstring_to_binary(env, val_str, strlen(val_str));
+            elements[j] = enif_make_tuple2(env, key_term, val_term);
+            j++;
+        }
+    }
+
+    (void)rd_kafka_conf_dump_free(dump, dump_size);
+
+    out_term = enif_make_list_from_array(env, elements, j);
+
+    (void)enif_free((void *)elements);
+
+    return out_term;
+}
+
+/* librdkafka_nif:kafka_config_fetch/2 */
+
+static ERL_NIF_TERM
+librdkafka_nif_kafka_config_fetch_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    knif_consumer_t *consumer = NULL;
+    knif_queue_t *queue = NULL;
+    ErlNifBinary name_bin;
+    const char *name_str;
+    unsigned char *dest = NULL;
+    size_t dest_size = 0;
+    ERL_NIF_TERM dest_term;
+
+    name_bin.size = 0;
+
+    if (argc != 2 || (!knif_consumer_get(env, argv[0], &consumer) && !knif_queue_get(env, argv[0], &queue))) {
+        return enif_make_badarg(env);
+    }
+
+    if (!knif_inspect_iolist_as_cstring(env, argv[1], &name_bin, &name_str)) {
+        return enif_make_badarg(env);
+    }
+
+    if (consumer == NULL) {
+        consumer = (void *)queue->consumer;
+    }
+
+    if (rd_kafka_conf_get(consumer->kc, name_str, NULL, &dest_size) != RD_KAFKA_CONF_OK) {
+        return ATOM_error;
+    }
+
+    dest = enif_make_new_binary(env, dest_size, &dest_term);
+
+    if (rd_kafka_conf_get(consumer->kc, name_str, (char *)dest, &dest_size) != RD_KAFKA_CONF_OK) {
+        return ATOM_error;
+    }
+
+    if (dest_size > 0) {
+        dest_term = enif_make_sub_binary(env, dest_term, 0, dest_size - 1);
+    }
+
+    return enif_make_tuple2(env, ATOM_ok, dest_term);
+}
+
+/* librdkafka_nif:topic_config_fetch/2 */
+
+static ERL_NIF_TERM
+librdkafka_nif_topic_config_fetch_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    knif_consumer_t *consumer = NULL;
+    knif_queue_t *queue = NULL;
+    ErlNifBinary name_bin;
+    const char *name_str;
+    unsigned char *dest = NULL;
+    size_t dest_size = 0;
+    ERL_NIF_TERM dest_term;
+
+    name_bin.size = 0;
+
+    if (argc != 2 || (!knif_consumer_get(env, argv[0], &consumer) && !knif_queue_get(env, argv[0], &queue))) {
+        return enif_make_badarg(env);
+    }
+
+    if (!knif_inspect_iolist_as_cstring(env, argv[1], &name_bin, &name_str)) {
+        return enif_make_badarg(env);
+    }
+
+    if (consumer == NULL) {
+        consumer = (void *)queue->consumer;
+    }
+
+    if (rd_kafka_topic_conf_get(consumer->tc, name_str, NULL, &dest_size) != RD_KAFKA_CONF_OK) {
+        return ATOM_error;
+    }
+
+    dest = enif_make_new_binary(env, dest_size, &dest_term);
+
+    if (rd_kafka_topic_conf_get(consumer->tc, name_str, (char *)dest, &dest_size) != RD_KAFKA_CONF_OK) {
+        return ATOM_error;
+    }
+
+    if (dest_size > 0) {
+        dest_term = enif_make_sub_binary(env, dest_term, 0, dest_size - 1);
+    }
+
+    return enif_make_tuple2(env, ATOM_ok, dest_term);
+}
 
 /* librdkafka_nif:consumer_new/4 */
 
@@ -243,6 +422,48 @@ librdkafka_nif_consumer_new_4(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
     return out_term;
 }
 
+/* librdkafka_nif:consumer_forward/2 */
+
+static ERL_NIF_TERM
+librdkafka_nif_consumer_forward_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    knif_consumer_t *consumer = NULL;
+    ERL_NIF_TERM owner_pid_term;
+    ERL_NIF_TERM from_pid_term;
+    ERL_NIF_TERM to_pid_term;
+    ErlNifPid from_pid;
+    ErlNifPid to_pid;
+    ERL_NIF_TERM message;
+    ErlNifMonitor old_mon;
+
+    if (argc != 2 || !knif_consumer_get(env, argv[0], &consumer) || !enif_get_local_pid(env, argv[1], &to_pid) ||
+        (enif_self(env, &from_pid) == NULL)) {
+        return enif_make_badarg(env);
+    }
+
+    owner_pid_term = enif_make_pid(env, &consumer->pid);
+    from_pid_term = enif_make_pid(env, &from_pid);
+    to_pid_term = argv[1];
+
+    if (enif_compare(owner_pid_term, from_pid_term) != 0) {
+        return enif_make_tuple2(env, ATOM_error, ATOM_not_owner);
+    }
+
+    message = enif_make_tuple2(env, ATOM_forward, argv[0]);
+    (void)enif_send(env, &to_pid, NULL, message);
+
+    if (enif_compare(from_pid_term, to_pid_term) == 0) {
+        return ATOM_ok;
+    }
+
+    old_mon = consumer->mon;
+    consumer->pid = to_pid;
+    (void)enif_monitor_process(env, (void *)consumer, &consumer->pid, &consumer->mon);
+    (void)enif_demonitor_process(env, (void *)consumer, &old_mon);
+
+    return ATOM_ok;
+}
+
 /* librdkafka_nif:consumer_select/1 */
 
 static ERL_NIF_TERM
@@ -257,6 +478,8 @@ librdkafka_nif_consumer_select_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     if (consumer->fds[0] == -1) {
         return enif_make_tuple2(env, ATOM_error, ATOM_closed);
     }
+
+    // XNIF_TRACE_F("consumer->fds[0] = %d\n", consumer->fds[0]);
 
     if (enif_select(env, (ErlNifEvent)consumer->fds[0], ERL_NIF_SELECT_READ, (void *)consumer, &consumer->pid, ATOM_undefined) <
         0) {
@@ -291,17 +514,37 @@ librdkafka_nif_consumer_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 
     rd_kafka_resp_err_t rkresperr;
     rd_kafka_topic_partition_list_t *rkparlist = NULL;
+    int rkloglevel;
+    const char *rklogfac;
+    const char *rklogstr;
+    const char *rkstats;
 
     while ((rkev = rd_kafka_queue_poll(consumer->rkqu, 0)) != NULL) {
         evcnt++;
-        XNIF_TRACE_F("[consumer] got %s: %s\n", rd_kafka_event_name(rkev), rd_kafka_err2str(rd_kafka_event_error(rkev)));
         switch (rd_kafka_event_type(rkev)) {
+        case RD_KAFKA_EVENT_LOG:
+            if (rd_kafka_event_log(rkev, &rklogfac, &rklogstr, &rkloglevel) == 0) {
+                (void)knif_consumer_log(env, consumer, rkloglevel, rklogfac, rklogstr);
+            } else {
+                XNIF_TRACE_F("unsupported event type?\n");
+            }
+            break;
+        case RD_KAFKA_EVENT_OFFSET_COMMIT:
+            rkresperr = rd_kafka_event_error(rkev);
+            rkparlist = rd_kafka_event_topic_partition_list(rkev);
+            (void)knif_consumer_offset_commit(env, consumer, rkresperr, rkparlist);
+            break;
         case RD_KAFKA_EVENT_REBALANCE:
             rkresperr = rd_kafka_event_error(rkev);
             rkparlist = rd_kafka_event_topic_partition_list(rkev);
             (void)knif_consumer_rebalance(env, consumer, rkresperr, rkparlist);
             break;
+        case RD_KAFKA_EVENT_STATS:
+            rkstats = rd_kafka_event_stats(rkev);
+            (void)knif_consumer_stats(env, consumer, rkstats);
+            break;
         default:
+            XNIF_TRACE_F("[consumer] got %s: %s\n", rd_kafka_event_name(rkev), rd_kafka_err2str(rd_kafka_event_error(rkev)));
             break;
         }
         // XNIF_TRACE_F("got event: %d\n", rd_kafka_event_type(rkev));
@@ -309,6 +552,48 @@ librdkafka_nif_consumer_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     }
 
     XNIF_TRACE_F("[consumer] read %lu events\n", evcnt);
+
+    return ATOM_ok;
+}
+
+/* librdkafka_nif:queue_forward/2 */
+
+static ERL_NIF_TERM
+librdkafka_nif_queue_forward_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    knif_queue_t *queue = NULL;
+    ERL_NIF_TERM owner_pid_term;
+    ERL_NIF_TERM from_pid_term;
+    ERL_NIF_TERM to_pid_term;
+    ErlNifPid from_pid;
+    ErlNifPid to_pid;
+    ERL_NIF_TERM message;
+    ErlNifMonitor old_mon;
+
+    if (argc != 2 || !knif_queue_get(env, argv[0], &queue) || !enif_get_local_pid(env, argv[1], &to_pid) ||
+        (enif_self(env, &from_pid) == NULL)) {
+        return enif_make_badarg(env);
+    }
+
+    owner_pid_term = enif_make_pid(env, &queue->pid);
+    from_pid_term = enif_make_pid(env, &from_pid);
+    to_pid_term = argv[1];
+
+    if (enif_compare(owner_pid_term, from_pid_term) != 0) {
+        return enif_make_tuple2(env, ATOM_error, ATOM_not_owner);
+    }
+
+    message = enif_make_tuple2(env, ATOM_forward, argv[0]);
+    (void)enif_send(env, &to_pid, NULL, message);
+
+    if (enif_compare(from_pid_term, to_pid_term) == 0) {
+        return ATOM_ok;
+    }
+
+    old_mon = queue->mon;
+    queue->pid = to_pid;
+    (void)enif_monitor_process(env, (void *)queue, &queue->pid, &queue->mon);
+    (void)enif_demonitor_process(env, (void *)queue, &old_mon);
 
     return ATOM_ok;
 }
@@ -413,26 +698,31 @@ librdkafka_nif_queue_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     XNIF_TRACE_F("[queue] read %lu events\n", evcnt);
 
-    messages = tv.entries;
-    message_set = enif_make_list_from_array(env, messages, tv.size);
-    message_set = enif_make_tuple4(env, message_set_topic, message_set_partition, message_set_offset, message_set);
-    (void)enif_send(env, &queue->pid, NULL, message_set);
-    (void)enif_free((void *)messages);
+    if (has_message_set) {
+        messages = tv.entries;
+        message_set = enif_make_list_from_array(env, messages, tv.size);
+        message_set = enif_make_tuple4(env, message_set_topic, message_set_partition, message_set_offset, message_set);
+        message_set = enif_make_tuple3(env, ATOM_kafka, enif_make_resource(env, (void *)queue), message_set);
+        (void)enif_send(env, &queue->pid, NULL, message_set);
+        (void)enif_free((void *)messages);
+    }
 
     return ATOM_ok;
 }
 
 /* NIF Callbacks */
 
-static ErlNifFunc librdkafka_nif_funcs[] = {{"consumer_new", 4, librdkafka_nif_consumer_new_4},
+static ErlNifFunc librdkafka_nif_funcs[] = {{"kafka_config_dump", 1, librdkafka_nif_kafka_config_dump_1},
+                                            {"topic_config_dump", 1, librdkafka_nif_topic_config_dump_1},
+                                            {"kafka_config_fetch", 2, librdkafka_nif_kafka_config_fetch_2},
+                                            {"topic_config_fetch", 2, librdkafka_nif_topic_config_fetch_2},
+                                            {"consumer_new", 4, librdkafka_nif_consumer_new_4},
+                                            {"consumer_forward", 2, librdkafka_nif_consumer_forward_2},
                                             {"consumer_select", 1, librdkafka_nif_consumer_select_1},
                                             {"consumer_poll", 1, librdkafka_nif_consumer_poll_1, ERL_NIF_DIRTY_JOB_IO_BOUND},
+                                            {"queue_forward", 2, librdkafka_nif_queue_forward_2},
                                             {"queue_select", 1, librdkafka_nif_queue_select_1},
                                             {"queue_poll", 1, librdkafka_nif_queue_poll_1, ERL_NIF_DIRTY_JOB_IO_BOUND}};
-
-// static ErlNifFunc librdkafka_nif_funcs[] = {{"check", 0, librdkafka_nif_check_0},
-//                                             {"kafka_config", 1, librdkafka_nif_kafka_config_1},
-//                                             {"topic_config", 1, librdkafka_nif_topic_config_1}};
 
 static void librdkafka_nif_make_atoms(ErlNifEnv *env);
 static int librdkafka_nif_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info);
@@ -451,11 +741,17 @@ librdkafka_nif_make_atoms(ErlNifEnv *env)
     ATOM(ATOM_closed, "closed");
     ATOM(ATOM_error, "error");
     ATOM(ATOM_false, "false");
+    ATOM(ATOM_fetch, "fetch");
+    ATOM(ATOM_forward, "forward");
     ATOM(ATOM_kafka, "kafka");
+    ATOM(ATOM_log, "log");
     ATOM(ATOM_nil, "nil");
+    ATOM(ATOM_not_owner, "not_owner");
+    ATOM(ATOM_offset_commit, "offset_commit");
     ATOM(ATOM_ok, "ok");
     ATOM(ATOM_rebalance, "rebalance");
     ATOM(ATOM_revoke_partitions, "revoke_partitions");
+    ATOM(ATOM_stats, "stats");
     ATOM(ATOM_true, "true");
     ATOM(ATOM_undefined, "undefined");
 #undef ATOM

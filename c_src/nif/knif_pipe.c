@@ -15,11 +15,13 @@ knif_pipe_open(int fds[2])
     int retval;
     retval = cloexec_pipe(fds);
     if (retval == 0) {
-        int fl;
-        fl = fcntl(fds[0], F_GETFL, 0);
-        (void)fcntl(fds[0], F_SETFL, fl | O_NONBLOCK);
-        fl = fcntl(fds[1], F_GETFL, 0);
-        (void)fcntl(fds[1], F_SETFL, fl | O_NONBLOCK);
+        // int fl;
+        // fl = fcntl(fds[0], F_GETFL, 0);
+        // (void)fcntl(fds[0], F_SETFL, fl | O_NONBLOCK);
+        // fl = fcntl(fds[1], F_GETFL, 0);
+        // (void)fcntl(fds[1], F_SETFL, fl | O_NONBLOCK);
+        (void)fcntl(fds[0], F_SETFL, O_NONBLOCK);
+        (void)fcntl(fds[1], F_SETFL, O_NONBLOCK);
     } else {
         fds[0] = -1;
         fds[1] = -1;
