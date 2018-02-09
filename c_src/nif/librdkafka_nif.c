@@ -26,6 +26,7 @@ static ERL_NIF_TERM ATOM_nil;
 static ERL_NIF_TERM ATOM_not_owner;
 static ERL_NIF_TERM ATOM_offset_commit;
 static ERL_NIF_TERM ATOM_ok;
+static ERL_NIF_TERM ATOM_partition_eof;
 static ERL_NIF_TERM ATOM_rebalance;
 static ERL_NIF_TERM ATOM_revoke_partitions;
 static ERL_NIF_TERM ATOM_stats;
@@ -658,12 +659,12 @@ librdkafka_nif_queue_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ERL_NIF_TERM message_set_partition;
     ERL_NIF_TERM message_set_offset;
     ERL_NIF_TERM message_set;
+    ERL_NIF_TERM event;
 
     // (void)xnif_vector_reserve(&tv, rkparlist->cnt);
 
     while ((rkev = rd_kafka_queue_poll(queue->rkqu, 0)) != NULL) {
         evcnt++;
-        XNIF_TRACE_F("[queue] got %s: %s\n", rd_kafka_event_name(rkev), rd_kafka_err2str(rd_kafka_event_error(rkev)));
         switch (rd_kafka_event_type(rkev)) {
         case RD_KAFKA_EVENT_FETCH:
             rkresperr = rd_kafka_event_error(rkev);
@@ -689,7 +690,19 @@ librdkafka_nif_queue_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             // XNIF_TRACE_F("[queue] fetch rkresperr = %d, count = %d\n", rkresperr, rd_kafka_event_message_count(rkev));
             // (void)knif_consumer_rebalance(env, consumer, rkresperr, rkparlist);
             break;
+        case RD_KAFKA_EVENT_ERROR:
+            rkresperr = rd_kafka_event_error(rkev);
+            if (rkresperr == RD_KAFKA_RESP_ERR__PARTITION_EOF) {
+                event = enif_make_tuple3(env, ATOM_kafka, enif_make_resource(env, (void *)queue), ATOM_partition_eof);
+                (void)enif_send(env, &queue->pid, NULL, event);
+            } else {
+                XNIF_TRACE_F("[queue] got an error: %s (%d)\n", rd_kafka_err2str(rd_kafka_event_error(rkev)),
+                             rd_kafka_event_error(rkev));
+            }
+            break;
         default:
+            XNIF_TRACE_F("[queue] got %s: %s (%d)\n", rd_kafka_event_name(rkev), rd_kafka_err2str(rd_kafka_event_error(rkev)),
+                         rd_kafka_event_error(rkev));
             break;
         }
         // XNIF_TRACE_F("got event: %d\n", rd_kafka_event_type(rkev));
@@ -719,10 +732,10 @@ static ErlNifFunc librdkafka_nif_funcs[] = {{"kafka_config_dump", 1, librdkafka_
                                             {"consumer_new", 4, librdkafka_nif_consumer_new_4},
                                             {"consumer_forward", 2, librdkafka_nif_consumer_forward_2},
                                             {"consumer_select", 1, librdkafka_nif_consumer_select_1},
-                                            {"consumer_poll", 1, librdkafka_nif_consumer_poll_1, ERL_NIF_DIRTY_JOB_IO_BOUND},
+                                            {"consumer_poll", 1, librdkafka_nif_consumer_poll_1, ERL_NIF_DIRTY_JOB_CPU_BOUND},
                                             {"queue_forward", 2, librdkafka_nif_queue_forward_2},
                                             {"queue_select", 1, librdkafka_nif_queue_select_1},
-                                            {"queue_poll", 1, librdkafka_nif_queue_poll_1, ERL_NIF_DIRTY_JOB_IO_BOUND}};
+                                            {"queue_poll", 1, librdkafka_nif_queue_poll_1, ERL_NIF_DIRTY_JOB_CPU_BOUND}};
 
 static void librdkafka_nif_make_atoms(ErlNifEnv *env);
 static int librdkafka_nif_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info);
@@ -749,6 +762,7 @@ librdkafka_nif_make_atoms(ErlNifEnv *env)
     ATOM(ATOM_not_owner, "not_owner");
     ATOM(ATOM_offset_commit, "offset_commit");
     ATOM(ATOM_ok, "ok");
+    ATOM(ATOM_partition_eof, "partition_eof");
     ATOM(ATOM_rebalance, "rebalance");
     ATOM(ATOM_revoke_partitions, "revoke_partitions");
     ATOM(ATOM_stats, "stats");
