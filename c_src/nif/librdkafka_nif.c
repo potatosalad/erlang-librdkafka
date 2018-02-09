@@ -710,6 +710,21 @@ librdkafka_nif_queue_poll_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         case RD_KAFKA_EVENT_ERROR:
             rkresperr = rd_kafka_event_error(rkev);
             if (rkresperr == RD_KAFKA_RESP_ERR__PARTITION_EOF) {
+                if (has_message_set) {
+                    messages = tv.entries;
+                    message_set = enif_make_list_from_array(env, messages, tv.size);
+                    message_set = enif_make_tuple4(env, message_set_topic, message_set_partition, message_set_offset, message_set);
+                    message_set = enif_make_tuple3(env, ATOM_kafka, enif_make_resource(env, (void *)queue), message_set);
+                    (void)enif_send(env, &queue->pid, NULL, message_set);
+                    (void)enif_free((void *)messages);
+                    tv.entries = NULL;
+                    tv.size = 0;
+                    tv.capacity = 0;
+                    rkmsgcnt = 0;
+                    tvoffset = 0;
+                    messages = NULL;
+                    has_message_set = 0;
+                }
                 event = enif_make_tuple3(env, ATOM_kafka, enif_make_resource(env, (void *)queue), ATOM_partition_eof);
                 (void)enif_send(env, &queue->pid, NULL, event);
             } else {
